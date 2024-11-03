@@ -72,20 +72,16 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
     let bitfield = find_attr(&input.attrs, "bitfield").expect("Must have a bitfield attr.");
     let Params {
         ty,
-        repr,
-        into,
-        from,
         bits,
-        new,
+        debug,
         default,
         order,
         conversion,
-        ..
     } = bitfield.parse_args()?;
-
     let syn::Fields::Named(fields) = input.fields else {
         return Err(s_err(span, "only named fields are supported"));
     };
+    let repr = ty.clone();
 
     let mut offset = 0;
     let mut members = Vec::with_capacity(fields.named.len());
@@ -93,8 +89,6 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
         let f = Member::new(
             ty.clone(),
             bits,
-            into.clone(),
-            from.clone(),
             field,
             offset,
             order,
@@ -126,32 +120,27 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
 
     let spec_defaults = members.iter().map(Member::spec_default).collect::<Vec<_>>();
 
-    let impl_new = new.cfg().map(|cfg| {
-        let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
-        quote! {
+    let impl_new = quote! {
             /// Creates a new default initialized bitfield.
-            #attr
-            #[allow(clippy::assign_op_pattern)]
             pub open spec fn new() -> Self {
                 Self::default()
             }
-        }
-    });
+        };
 
-    let impl_default = default.cfg().map(|cfg| {
-        let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
+    let impl_default = if default {
         quote! {
-            #attr
             impl #spec_name {
                 #[allow(clippy::assign_op_pattern)]
                 pub closed spec fn default() -> Self {
-                    let this = Self(#from(0));
+                    let this = Self(0);
                     #( #spec_defaults )*
                     this
                 }
             }
         }
-    });
+    } else {
+        quote!{}
+    };
 
     let conversion = conversion.then(|| {
         quote! {
@@ -169,7 +158,7 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
     let external_types = externals.iter().map(|e| e.ty.clone()).collect();
 
     let spec_members = members.iter().enumerate().map(|(i, m)|{let mut others = all_idents.clone(); others.remove(i); m.to_spec(others, &name, &external_types)}).collect::<Vec<_>>();
-    let to_external_spec = if spec_only.cfg().is_none() {
+    let to_external_spec = if !spec_only {
         members
         .iter()
         .map(|m| m.to_external_spec(&name, &spec_name))
@@ -180,7 +169,7 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
     let ex_new = format_ident!("ex_{}_new", name_lower);
     let ex_default = format_ident!("ex_{}_default", name_lower);
     let _modname = format_ident!("mod_{}", name_lower);
-    let external_types = externals.iter().map(|e|gen_external_types(&spec_name, &ty, &e.ty, e.bits));
+    let external_types = externals.iter().map(|e|gen_external_types(&spec_name, &repr, &e.ty, e.bits));
     Ok(quote! {
         #[verus_verify]
         #input_copy
@@ -571,12 +560,10 @@ impl Member {
         // fallback when there is no setter
         let offset = self.offset;
         let base_ty = &self.base_ty;
-        let repr_into = &self.repr_into;
-        let repr_from = &self.repr_from;
         let bits = self.bits as u32;
         quote! {
             let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
-            let this = Self(#repr_from(#repr_into(this.0) | (((#default as #base_ty) & mask) << #offset)));
+            let this = Self(this.0 | (((#default as #base_ty) & mask) << #offset));
         }
     }
 }
@@ -670,8 +657,6 @@ impl Member {
             offset,
             bits,
             base_ty,
-            repr_into,
-            repr_from,
             default: _,
             inner:
                 Some(MemberInner {
@@ -733,7 +718,7 @@ impl Member {
                 #[verifier(inline)]
                 spec fn #reveal_ident(&self) -> #ty {
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
-                    let this = (#repr_into(self.0) >> Self::#offset_ident) & mask;
+                    let this = (self.0 >> Self::#offset_ident) & mask;
                     #from
                 }
 
@@ -757,9 +742,7 @@ impl Member {
             });
         }
         let reveal_other_fields: Vec<Ident>= other_fields.iter().map(|f| format_ident!("reveal_{}", f)).collect(); // This filters out None and unwraps Some
-
-        let (class, _) = type_info(ty);
-        let call_axiom_into_from = if class == TypeClass::Other && externals.contains(ty) {
+        let call_axiom_into_from = if externals.contains(&ty) {
             if let syn::Type::Path(p) = &ty {
                 let axiom_into_from = format_ident!("axiom_{}_into_from_bits", p.path.get_ident().expect("external type must be a Path with ident").to_string().to_lowercase());
                 quote!{#axiom_into_from(value);}
@@ -781,8 +764,8 @@ impl Member {
                     if value > mask {
                         Err(())
                     } else {
-                        let bits = #repr_into(self.0) & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident;
-                        Ok(Self(#repr_from(bits)))
+                        let bits = self.0 & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident;
+                        Ok(Self(bits))
                     }
                 }
 
@@ -877,15 +860,12 @@ impl Member {
         let with_ident = format_ident!("with_{}", ident);
         let with_ident_checked = format_ident!("with_{}_checked", ident);
         let set_ident = format_ident!("set_{}", ident);
-        let set_ident_checked = format_ident!("set_{}_checked", ident);
         let _bits_ident = format_ident!("{}_BITS", ident_upper);
         let _offset_ident = format_ident!("{}_OFFSET", ident_upper);
 
         let ex_ident = format_ident!("ex_{}_{}", name_lower, ident);
         let ex_with_ident = format_ident!("ex_with_{}_{}", name_lower, ident);
-        let ex_with_ident_checked = format_ident!("ex_with_{}_{}_checked", name_lower, ident);
         let ex_set_ident = format_ident!("ex_set_{}_{}", name_lower, ident);
-        let ex_set_ident_checked = format_ident!("ex_set_{}_{}_checked", name_lower, ident);
         let ex_bits_ident = format_ident!("ex_{}_{}_bits", name_lower, ident_upper);
         let _ex_bits_ident = quote! {#ex_bits_ident()};
         let ex_offset_ident = format_ident!("ex_{}_{}_offset", name_lower, ident_upper);
@@ -939,16 +919,6 @@ impl Member {
             tokens.extend(quote! {
                 #doc
                 #[doc = #location]
-                #[verifier(external_fn_specification)]
-                pub fn #ex_with_ident_checked(this: #name, value: #ty) -> (ret: core::result::Result<#name, ()>)
-                ensures
-                    this@.#with_ident_checked(value).is_ok() == ret.is_ok(),
-                    builtin::equal(ret.unwrap()@, this@.#with_ident(value)),
-                {
-                    this.#with_ident_checked(value)
-                }
-                #doc
-                #[doc = #location]
                 #[cfg_attr(debug_assertions, track_caller)]
                 #[verifier(external_fn_specification)]
                 pub fn #ex_with_ident(this: #name, value: #ty) -> (ret: #name)
@@ -966,19 +936,6 @@ impl Member {
                     builtin::equal(this@, old(this)@.#with_ident(value)),
                 {
                     this.#set_ident(value)
-                }
-
-                #[verifier(external_fn_specification)]
-                pub fn #ex_set_ident_checked(this: &mut #name, value: #ty) -> (ret: core::result::Result<(), ()>)
-                ensures
-                    ret.is_ok() == old(this)@.#with_ident_checked(value).is_ok(),
-                    if ret.is_ok() {
-                        builtin::equal(this@, old(this)@.#with_ident(value))
-                    } else {
-                        true
-                    },
-                {
-                    this.#set_ident_checked(value)
                 }
             });
         }
@@ -1310,7 +1267,7 @@ impl Parse for Params {
 
 /// The bitfield macro parameters
 struct SpecParams {
-    spec_only: Enable,
+    spec_only: bool,
     externals: Vec<ExternalStruct>,
 }
 
@@ -1336,7 +1293,7 @@ impl Parse for ExternalStruct {
 impl Parse for SpecParams {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut ret = SpecParams {
-            spec_only: Enable::No,
+            spec_only: false,
             externals: vec![],
         };
 
@@ -1346,7 +1303,8 @@ impl Parse for SpecParams {
             <Token![=]>::parse(input)?;
             match ident.to_string().as_str() {
                 "spec-only" => {
-                    ret.spec_only = input.parse()?;
+                    let b: syn::LitBool = input.parse()?;
+                    ret.spec_only = b.value;
                 }
                 "external" => {
                     ret.externals.push(input.parse()?);
