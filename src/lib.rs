@@ -78,6 +78,12 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
     let spec_name = format_ident!("Spec{}", name);
 
     let vis = input.vis;
+    let open_close = if vis == syn::Visibility::Inherited {
+        quote!{closed}
+    } else {
+        quote!{open}
+    };
+
     let bitfield = find_attr(&input.attrs, "bitfield").expect("Must have a bitfield attr.");
     let Params {
         ty,
@@ -165,11 +171,11 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
     let conversion = conversion.then(|| {
         quote! {
             /// Convert from bits.
-            #vis spec fn spec_from_bits(bits: #repr) -> Self {
+            #vis #open_close spec fn spec_from_bits(bits: #repr) -> Self {
                 Self(bits)
             }
             /// Convert into bits.
-            #vis spec fn spec_into_bits(self) -> #repr {
+            #vis #open_close spec fn spec_into_bits(self) -> #repr {
                 self.0
             }
         }
@@ -234,7 +240,7 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
         #exe_code
         builtin_macros::verus!{
         #[repr(transparent)]
-        #vis ghost struct #spec_name(#repr);
+        #vis ghost struct #spec_name(pub #repr);
 
         impl #spec_name {
             #impl_new
@@ -958,6 +964,7 @@ impl Member {
                 {
                     let ret = self.#reveal_with_ident_checked(value);
                     let ret_val = ret.unwrap();
+                    if ret.is_ok() {
                     #call_axiom_into_from
                     let this = value;
                     ::verify_proof::bits::lemma_bitfield_u64_get_bits(ret_val.0, Self::#offset_ident as #base_ty, Self::#bits_ident as #base_ty);
@@ -974,6 +981,7 @@ impl Member {
                     ::verify_proof::bits::lemma_bit_u64_get_bits_bound(self.0, #other_offset_bits);
                     ::verify_proof::bits::lemma_bit_u64_get_bits_bound(ret_val.0, #other_offset_bits);
                     )*
+                    }
                     ret
                 }
 
