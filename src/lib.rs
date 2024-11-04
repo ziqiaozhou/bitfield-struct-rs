@@ -799,8 +799,8 @@ impl Member {
                     let ret_val = ret.unwrap();
                     #call_axiom_into_from
                     let this = value;
-                    ::verify_proof::bits::lemma_bit_u64_get_bits(ret_val.0, Self::#offset_ident as #base_ty, Self::#bits_ident as #base_ty);
-                    ::verify_proof::bits::lemma_bit_u64_set_bits(self.0, #into, Self::#offset_ident as #base_ty, Self::#bits_ident as #base_ty);
+                    ::verify_proof::bits::lemma_bitfield_u64_get_bits(ret_val.0, Self::#offset_ident as #base_ty, Self::#bits_ident as #base_ty);
+                    ::verify_proof::bits::lemma_bitfield_u64_set_bits(self.0, #into, Self::#offset_ident as #base_ty, Self::#bits_ident as #base_ty);
                     ::verify_proof::bits::lemma_bit_u64_set_get_bits(
                         self.0, #into, Self::#offset_ident as #base_ty, Self::#bits_ident as #base_ty,
                     );
@@ -808,8 +808,8 @@ impl Member {
                         self.0, #into, Self::#offset_ident as #base_ty, Self::#bits_ident as #base_ty,
                         #other_offset_bits
                     );
-                    ::verify_proof::bits::lemma_bit_u64_get_bits(self.0, #other_offset_bits);
-                    ::verify_proof::bits::lemma_bit_u64_get_bits(ret_val.0, #other_offset_bits);
+                    ::verify_proof::bits::lemma_bitfield_u64_get_bits(self.0, #other_offset_bits);
+                    ::verify_proof::bits::lemma_bitfield_u64_get_bits(ret_val.0, #other_offset_bits);
                     ::verify_proof::bits::lemma_bit_u64_get_bits_bound(self.0, #other_offset_bits);
                     ::verify_proof::bits::lemma_bit_u64_get_bits_bound(ret_val.0, #other_offset_bits);
                     )*
