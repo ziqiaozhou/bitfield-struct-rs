@@ -1311,8 +1311,7 @@ impl Parse for SpecParams {
         };
 
         // try parse additional args
-        loop {
-            let ident = Ident::parse(input)?;
+        while let Ok(ident) = Ident::parse(input) {
             <Token![=]>::parse(input)?;
             match ident.to_string().as_str() {
                 "spec_only" => {
