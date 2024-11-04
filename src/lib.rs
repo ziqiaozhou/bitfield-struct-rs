@@ -66,17 +66,16 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
     let name = input.ident;
     let name_lower = name.to_string().to_lowercase();
     let spec_name = format_ident!("Spec{}", name);
-    let _external_mod_name = format_ident!("Ex{}", name);
 
     let vis = input.vis;
     let bitfield = find_attr(&input.attrs, "bitfield").expect("Must have a bitfield attr.");
     let Params {
         ty,
         bits,
-        debug,
         default,
         order,
         conversion,
+        ..
     } = bitfield.parse_args()?;
     let syn::Fields::Named(fields) = input.fields else {
         return Err(s_err(span, "only named fields are supported"));
@@ -169,36 +168,52 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
     let ex_new = format_ident!("ex_{}_new", name_lower);
     let ex_default = format_ident!("ex_{}_default", name_lower);
     let _modname = format_ident!("mod_{}", name_lower);
-    let external_types = externals.iter().map(|e|gen_external_types(&spec_name, &repr, &e.ty, e.bits));
+    let external_types = externals.iter().map(|e|gen_external_types(&spec_name, &ty, &e.ty, e.bits));
+    let exe_code = if !spec_only {
+        quote!{
+            #[verus_verify]
+            #input_copy
+            builtin_macros::verus!{
+            impl vstd::prelude::View for #name {
+                type V = #spec_name;
+                closed spec fn view(&self) -> Self::V {
+                    #spec_name(self.0)
+                }
+            }
+            #[verifier(external_fn_specification)]
+            pub fn #ex_new() -> (ret: #name)
+            ensures
+                ::builtin::equal(ret@, #spec_name::new())
+            {
+                #name::new()
+            }
+            #[verifier(external_fn_specification)]
+            pub fn #ex_default() -> (ret: #name)
+            ensures
+                ::builtin::equal(ret@, #spec_name::new())
+            {
+                #name::default()
+            }
+            impl verify_external::convert::FromSpec<#repr> for #name {
+                closed spec fn from_spec(v: #repr) -> Self {
+                    Self(v)
+                }
+            }
+            impl verify_external::convert::FromSpec<#name> for #repr {
+                closed spec fn from_spec(v: #name) -> #repr {
+                    v.0
+                }
+            }
+        }
+        }
+    } else {
+        quote!{}
+    };
     Ok(quote! {
-        #[verus_verify]
-        #input_copy
+        #exe_code
         builtin_macros::verus!{
         #[repr(transparent)]
         #vis ghost struct #spec_name(#repr);
-
-        impl vstd::prelude::View for #name {
-            type V = #spec_name;
-            closed spec fn view(&self) -> Self::V {
-                #spec_name(self.0)
-            }
-        }
-
-        #[verifier(external_fn_specification)]
-        pub fn #ex_new() -> (ret: #name)
-        ensures
-            ::builtin::equal(ret@, #spec_name::new())
-        {
-            #name::new()
-        }
-
-        #[verifier(external_fn_specification)]
-        pub fn #ex_default() -> (ret: #name)
-        ensures
-            ::builtin::equal(ret@, #spec_name::new())
-        {
-            #name::default()
-        }
 
         impl #spec_name {
             #impl_new
@@ -209,17 +224,6 @@ fn bitfield_inner_spec(args: TokenStream, input: TokenStream) -> syn::Result<Tok
         #( #spec_members )*
 
         #impl_default
-
-        impl verify_external::convert::FromSpec<#repr> for #name {
-            closed spec fn from_spec(v: #repr) -> Self {
-                Self(v)
-            }
-        }
-        impl verify_external::convert::FromSpec<#name> for #repr {
-            closed spec fn from_spec(v: #name) -> #repr {
-                v.0
-            }
-        }
 
         #( #to_external_spec )*
         #( #external_types )*
@@ -268,6 +272,7 @@ fn gen_external_types(_spec_name: &Ident, base_ty: &syn::Type, ty: &syn::Type, b
     }
 }
 
+#[allow(dead_code)]
 fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let input = syn::parse2::<syn::ItemStruct>(input)?;
     let Params {
@@ -1302,7 +1307,7 @@ impl Parse for SpecParams {
             let ident = Ident::parse(input)?;
             <Token![=]>::parse(input)?;
             match ident.to_string().as_str() {
-                "spec-only" => {
+                "spec_only" => {
                     let b: syn::LitBool = input.parse()?;
                     ret.spec_only = b.value;
                 }
